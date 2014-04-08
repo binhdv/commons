@@ -17,7 +17,7 @@
 		<type>org.exoplatform.settings.impl.SettingServiceImpl</type>
 	</component>
 
-    <!-- configuration unused : please check why it's declared here -->
+    <!-- configuration unused : please check why it's declared here (incorrect behavior) -->
 	<component>
 		<key>org.exoplatform.services.cache.CacheService</key>
 		<jmx-name>cache:type=CacheService</jmx-name>
@@ -105,5 +105,7 @@
 		</component-plugin>
 	</external-component-plugins>
 
+	<import>classpath:/conf/standalone/test-commons-configuration.xml</import>
+	<import>classpath:/conf/standalone/test-notification-configuration.xml</import>
 	<import>classpath:/conf/standalone/test-conteninitializerservice-configuration.xml</import>
 </configuration>

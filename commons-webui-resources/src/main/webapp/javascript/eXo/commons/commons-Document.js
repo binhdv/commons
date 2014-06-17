@@ -44,11 +44,25 @@ DocumentSelector.prototype.init = function(uicomponentId, restContext){
   this.getFoldersAndFilesURL = restContext + this.getFoldersAndFiles;
   this.deleteFolderOrFileURL = restContext + this.deleteFolderOrFile;
   this.createFolderURL = restContext + this.createFolder;
+  me.removeGeneralDrivesOption();
   var documentItem = new DocumentItem();
   documentItem.driveType = this.defaultDriveType;
   me.resetDropDownBox();
   me.renderDetails(documentItem);
 };
+
+DocumentSelector.prototype.removeGeneralDrivesOption = function() {
+  var me = _module.DocumentSelector;
+  var url = this.getDrivesURL;
+  url += "?" + this.driveTypeParam + "=general";
+  var data = me.request(url);
+  var folderContainer = jQuery("Folders:first", data);
+  var folderList = jQuery("Folder", folderContainer);
+  if (!folderList || folderList.length <= 0) {
+    var dropDownBox = jQuery('#DriveTypeDropDown'); 
+    jQuery(dropDownBox).find('ul>li:first').remove();
+  }
+}
 
 DocumentSelector.prototype.resetDropDownBox = function() {
 	var dropDownBox = jQuery('#DriveTypeDropDown'); 
@@ -364,8 +378,6 @@ DocumentSelector.prototype.newFolder = function(inputFolderName){
   var msg_select_folder = inputFolderName.getAttribute("msg_select_drive");
   var msg_enter_folder_name = inputFolderName.getAttribute("msg_enter_folder_name");
   var msg_empty_folder_name = inputFolderName.getAttribute("msg_empty_folder_name");
-  var msg_invalid_folder_name = inputFolderName.getAttribute("msg_invalid_folder_name");
-  var folder_name_standard = /^[\w.\s-]+$/;
   
   if (!me.selectedItem || !me.selectedItem.driveName) {
     alert(msg_select_folder);
@@ -381,12 +393,7 @@ DocumentSelector.prototype.newFolder = function(inputFolderName){
     alert(msg_empty_folder_name);
     return;
   }
-  
-  if ( !folder_name_standard.test(folderName) ) {
-    alert(msg_invalid_folder_name);
-    return;
-  }
-  
+   
   var canAddChild = me.selectedItem.canAddChild;
   if (canAddChild == "false") {
     alert(msg_new_folder_not_allow);

@@ -20,6 +20,8 @@ import java.text.MessageFormat;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Locale;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 import javax.jcr.Value;
 import javax.mail.internet.AddressException;
@@ -31,7 +33,9 @@ import org.exoplatform.commons.api.notification.template.Element;
 import org.exoplatform.commons.notification.template.DigestTemplate;
 import org.exoplatform.commons.notification.template.SimpleElement;
 import org.exoplatform.commons.notification.template.TemplateUtils;
+import org.exoplatform.commons.utils.CommonsUtils;
 import org.exoplatform.container.xml.InitParams;
+import org.exoplatform.services.organization.OrganizationService;
 
 
 public class NotificationUtils {
@@ -47,6 +51,12 @@ public class NotificationUtils {
   public static final String DEFAULT_DIGEST_MORE_KEY   = "Notification.digest.more.{0}";
 
   public static final String FEATURE_NAME              = "notification";
+  
+  private static final Pattern LINK_PATTERN = Pattern.compile("<a ([^>]+)>([^<]+)</a>");
+
+  private static final Pattern EMAIL_PATTERN = Pattern.compile("^[_a-z0-9-+]+(\\.[_a-z0-9-]+)*@[a-z0-9-]+(\\.[a-z0-9-]+)*(\\.[a-z]{2,5})$");
+  
+  private static final String styleCSS = " style=\"color: #2f5e92; text-decoration: none;\"";
   
   public static String getDefaultKey(String key, String providerId) {
     return MessageFormat.format(key, providerId);
@@ -166,14 +176,56 @@ public class NotificationUtils {
     addressList = StringUtils.replace(addressList, ";", ",");
     try {
       InternetAddress[] iAdds = InternetAddress.parse(addressList, true);
-      String emailRegex = "[_A-Za-z0-9-]+(\\.[_A-Za-z0-9-]+)*@[_A-Za-z0-9-.]+\\.[A-Za-z]{2,5}";
       for (int i = 0; i < iAdds.length; i++) {
-        if (!iAdds[i].getAddress().matches(emailRegex))
+        Matcher matcher = EMAIL_PATTERN.matcher(iAdds[i].getAddress());
+        if (! matcher.find())
           return false;
       }
     } catch (AddressException e) {
       return false;
     }
     return true;
+  }
+  
+  public static boolean isDeletedMember(String userName) {
+    try {
+      return CommonsUtils.getService(OrganizationService.class).getUserHandler().findUserByName(userName) == null;
+    } catch (Exception e) {
+      return false;
+    }
+  }
+  
+  /**
+   * Add the style css for a link in the activity title to display a link without underline
+   * 
+   * @param title activity title
+   * @return activity title after process all link
+   */
+  public static String processLinkTitle(String title) {
+    Matcher matcher = LINK_PATTERN.matcher(title);
+    while (matcher.find()) {
+      String result = matcher.group(1);
+      title = title.replace(result, result + styleCSS);
+    }
+    return title;
+  }
+  
+  public static String getProfileUrl(String userId) {
+    StringBuffer footerLink = new StringBuffer(CommonsUtils.getCurrentDomain());
+    return footerLink.append("/").append(CommonsUtils.getRestContextName())
+            .append("/").append("social/notifications/redirectUrl/notification_settings")
+            .append("/").append(userId).toString();
+  }
+  
+  public static String getPortalHome(String portalName) {
+    StringBuffer portalLink = new StringBuffer(CommonsUtils.getCurrentDomain());
+    portalLink.append("/")
+              .append(CommonsUtils.getRestContextName())
+              .append("/")
+              .append("social/notifications/redirectUrl/portal_home")
+              .append("/")
+              .append(portalName);
+    
+    return "<a target=\"_blank\" style=\"text-decoration: none; font-weight: bold; color: #2F5E92; \" href=\"" + portalLink.toString() + "\">" + portalName + "</a>";
   }
 }

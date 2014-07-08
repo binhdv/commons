@@ -20,7 +20,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
-import java.util.concurrent.Callable;
+import java.util.concurrent.locks.ReentrantLock;
 
 import javax.jcr.Node;
 import javax.jcr.NodeIterator;
@@ -29,7 +29,6 @@ import javax.jcr.query.Query;
 import javax.jcr.query.QueryManager;
 
 import org.exoplatform.commons.api.notification.model.UserSetting;
-import org.exoplatform.commons.api.notification.service.NotificationCompletionService;
 import org.exoplatform.commons.api.notification.service.setting.UserSettingService;
 import org.exoplatform.commons.api.settings.SettingService;
 import org.exoplatform.commons.api.settings.SettingValue;
@@ -40,17 +39,14 @@ import org.exoplatform.commons.notification.NotificationUtils;
 import org.exoplatform.commons.notification.impl.AbstractService;
 import org.exoplatform.commons.notification.impl.NotificationSessionManager;
 import org.exoplatform.commons.utils.CommonsUtils;
-import org.exoplatform.commons.utils.ListAccess;
 import org.exoplatform.services.jcr.ext.common.SessionProvider;
 import org.exoplatform.services.jcr.impl.core.query.QueryImpl;
 import org.exoplatform.services.log.ExoLogger;
 import org.exoplatform.services.log.Log;
-import org.exoplatform.services.organization.OrganizationService;
 import org.exoplatform.services.organization.User;
 import org.exoplatform.services.organization.impl.UserImpl;
-import org.picocontainer.Startable;
 
-public class UserSettingServiceImpl extends AbstractService implements UserSettingService, Startable {
+public class UserSettingServiceImpl extends AbstractService implements UserSettingService {
   private static final Log        LOG                = ExoLogger.getLogger(UserSettingServiceImpl.class);
 
   /** Setting Scope on Common Setting **/
@@ -62,15 +58,14 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
 
   private NotificationConfiguration configuration;
 
-  private NotificationCompletionService completeService;
-  
   protected static final int MAX_LIMIT = 30;
+  
+  transient final ReentrantLock lock = new ReentrantLock();
   
   public UserSettingServiceImpl(SettingService settingService, NotificationConfiguration configuration) {
     this.settingService = settingService;
     this.configuration = configuration;
     this.workspace = configuration.getWorkspace();
-    this.completeService = CommonsUtils.getService(NotificationCompletionService.class);
   }
 
   private Node getUserSettingHome(Session session) throws Exception {
@@ -86,59 +81,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   }
 
   @Override
-  public void start() {
-    Callable<Boolean> callable = new Callable<Boolean>() {
-      @Override
-      public Boolean call() throws Exception {
-        try {
-          SessionProvider sProvider = NotificationSessionManager.createSystemProvider();
-          if (hasUserToUpgrade(sProvider)) {
-            processUpgrade();
-          }
-        } catch (Exception e) {
-          return false;
-        } finally {
-          NotificationSessionManager.closeSessionProvider();
-        }
-        return true;
-      }
-
-      private boolean hasUserToUpgrade(SessionProvider sProvider) {
-        try {
-          Session session = getSession(sProvider, workspace);
-          return session.getRootNode().getNode(SETTING_USER_PATH).getNodes().hasNext() == false;
-        } catch (Exception e) {
-          LOG.error("Cannot get node of users.", e);
-          return false;
-        }
-      }
-    };
-
-    this.completeService.addTask(callable);
-  }
-
-  @Override
-  public void stop() {
-  }
-  
-  private void processUpgrade() {
-    OrganizationService organizationService = CommonsUtils.getService(OrganizationService.class);
-    try {
-      ListAccess<User> list = organizationService.getUserHandler().findAllUsers();
-      int offset = 0, size = list.getSize();
-      //
-      SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
-      while (offset < size) {
-        addMixin(sProvider, list.load(offset, MAX_LIMIT));
-        offset += MAX_LIMIT;
-      }
-    } catch (Exception e) {
-      LOG.error("Upgrade old users to use notification default setting failed", e);
-    }
-  }
-
-
-  @Override
   public void save(UserSetting model) {
 
     String userId = model.getUserId();
@@ -151,7 +93,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
     saveUserSetting(userId, EXO_DAILY, dailys);
     saveUserSetting(userId, EXO_WEEKLY, weeklys);
 
-    //
     removeMixin(userId);
   }
 
@@ -170,7 +111,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   public UserSetting get(String userId) {
     UserSetting model = UserSetting.getInstance();
 
-    //
     List<String> instantlys = getArrayListValue(userId, EXO_INSTANTLY, null);
     if (instantlys != null) {
       model.setUserId(userId);
@@ -180,7 +120,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
       model.setWeeklyProviders(getArrayListValue(userId, EXO_WEEKLY, Collections.<String> emptyList()));
     } else {
       model = UserSetting.getDefaultInstance().setUserId(userId);
-      //
       addMixin(userId);
     }
     return model;
@@ -215,7 +154,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
 
   @Override
   public void addMixin(User[] users) {
-    SessionProvider sProvider = getSystemProvider();
+    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
     try {
       addMixin(sProvider, users);
     } catch (Exception e) {
@@ -224,11 +163,12 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   }
 
   private void addMixin(SessionProvider sProvider, User[] users) {
+    final ReentrantLock lock = this.lock;
     try {
-      //
       Session session = getSession(sProvider, workspace);
       Node userHomeNode = getUserSettingHome(session);
       Node userNode;
+      lock.lock();
       for (int i = 0; i < users.length; ++i) {
         User user = users[i];
         if (user == null || user.getUserName() == null) {
@@ -239,14 +179,19 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
         } else {
           userNode = userHomeNode.addNode(user.getUserName(), STG_SIMPLE_CONTEXT);
         }
-        //
         if (userNode.canAddMixin(MIX_DEFAULT_SETTING)) {
           userNode.addMixin(MIX_DEFAULT_SETTING);
+          LOG.debug("Done to addMixin default setting for user: " + user.getUserName());
+        }
+        if ((i + 1) % 200 == 0) {
+          session.save();
         }
       }
       session.save();
     } catch (Exception e) {
-      LOG.error("Failed to upgrade user notification setting", e);
+      LOG.error("Failed to addMixin for user notification setting", e);
+    } finally {
+      lock.unlock();
     }
   }
 
@@ -257,7 +202,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
    * @param userId the userId for removing
    */
   private void removeMixin(String userId) {
-    SessionProvider sProvider = getSystemProvider();
+    SessionProvider sProvider = CommonsUtils.getSystemSessionProvider();
     try {
       Session session = getSession(sProvider, workspace);
       Node userHomeNode = session.getRootNode().getNode(SETTING_USER_PATH);
@@ -265,7 +210,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
         Node userNode = userHomeNode.getNode(userId);
         if (userNode.isNodeType(MIX_DEFAULT_SETTING)) {
           userNode.removeMixin(MIX_DEFAULT_SETTING);
-          //
           sessionSave(userNode);
         }
       }
@@ -278,12 +222,10 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
     StringBuilder queryBuffer = new StringBuilder();
     queryBuffer.append(EXO_IS_ACTIVE).append("='true' AND (")
                .append(EXO_DAILY).append("<>''");
-    //
     if (configuration.isSendWeekly()) {
       queryBuffer.append(" OR ").append(EXO_WEEKLY).append("<>''");
     }
 
-    //
     queryBuffer.append(")");
 
     return queryBuffer;
@@ -307,7 +249,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   
   @Override
   public List<String> getUserSettingByPlugin(String pluginId) {
-    SessionProvider sProvider = getSystemProvider();
+    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();;
     List<String> userIds = new ArrayList<String>();
     try {
       NodeIterator iter = getDailyIterator(sProvider, 0, 0, pluginId);
@@ -351,8 +293,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   
   @Override
   public List<UserSetting> getDaily(int offset, int limit) {
-//    SessionProvider sProvider = SessionProvider.createSystemProvider();
-    SessionProvider sProvider = NotificationSessionManager.createSystemProvider();
+    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
     List<UserSetting> models = new ArrayList<UserSetting>();
     try {
       NodeIterator iter = getDailyIterator(sProvider, offset, limit, null);
@@ -362,8 +303,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
       }
     } catch (Exception e) {
       LOG.error("Failed to get all daily users have notification messages", e);
-    } finally {
-//      sProvider.close();
     }
 
     return models;
@@ -403,7 +342,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   
   @Override
   public long getNumberOfDaily() {
-    SessionProvider sProvider = NotificationSessionManager.createSystemProvider();
+    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
     try {
       NodeIterator iter = getDailyIterator(sProvider, 0, 0, null);
       return (iter == null) ? 0l : iter.getSize();
@@ -419,7 +358,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
             .append("/%' AND NOT jcr:path LIKE '/").append(SETTING_USER_PATH).append("/%/%'");
 
     QueryManager qm = session.getWorkspace().getQueryManager();
-    System.out.println(strQuery.toString());
     QueryImpl query = (QueryImpl) qm.createQuery(strQuery.toString(), Query.SQL);
     if (limit > 0) {
       query.setLimit(limit);
@@ -430,8 +368,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
 
   @Override
   public List<UserSetting> getDefaultDaily(int offset, int limit) {
-//    SessionProvider sProvider = SessionProvider.createSystemProvider();
-    SessionProvider sProvider = NotificationSessionManager.createSystemProvider();
+    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
     List<UserSetting> users = new ArrayList<UserSetting>();
     try {
       Session session = getSession(sProvider, workspace);
@@ -447,16 +384,14 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
       }
     } catch (Exception e) {
       LOG.error("Failed to get default daily users have notification messages", e);
-    } finally {
-//      sProvider.close();
-    }
+    } 
 
     return users;
   }
 
   @Override
   public long getNumberOfDefaultDaily() {
-    SessionProvider sProvider = NotificationSessionManager.createSystemProvider();
+    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
     try {
       Session session = getSession(sProvider, workspace);
       if (session.getRootNode().hasNode(SETTING_USER_PATH)) {
@@ -465,8 +400,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
       }
     } catch (Exception e) {
       LOG.error("Failed to get default daily users have notification messages", e);
-    } finally {
-//      sProvider.close();
     }
     return 0;
   }

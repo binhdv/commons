@@ -3,10 +3,14 @@ package org.exoplatform.settings.impl;
 import java.util.Arrays;
 import java.util.Calendar;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ThreadFactory;
 
 import javax.jcr.Node;
 
 import org.exoplatform.commons.api.notification.model.UserSetting;
+import org.exoplatform.commons.api.notification.service.storage.NotificationService;
 import org.exoplatform.commons.notification.impl.setting.UserSettingServiceImpl;
 import org.exoplatform.commons.testing.BaseCommonsTestCase;
 import org.exoplatform.commons.utils.CommonsUtils;
@@ -19,6 +23,7 @@ import org.junit.runners.MethodSorters;
 @FixMethodOrder(MethodSorters.NAME_ASCENDING)
 public class UserSettingServiceTest extends BaseCommonsTestCase {
   private UserSettingServiceImpl userSettingService;
+  private ExecutorService executor;
   
   public UserSettingServiceTest() {
   }
@@ -28,12 +33,17 @@ public class UserSettingServiceTest extends BaseCommonsTestCase {
     super.setUp();
     //
     userSettingService = getService(UserSettingServiceImpl.class);
+    addCreateDateForUser();
     // init setting home
     initSettingHome();
     //
-    userSettingService.start();
-    //
-    initModifiedDate();
+    ThreadFactory threadFactory = new ThreadFactory() {
+      public Thread newThread(Runnable arg0) {
+        return new Thread(arg0, "UserProfile thread");
+      }
+    };
+
+    executor = Executors.newFixedThreadPool(20, threadFactory);
   }
 
   @Override
@@ -41,13 +51,20 @@ public class UserSettingServiceTest extends BaseCommonsTestCase {
     session.logout();
   }
 
-  public void testGetDefautSettingAfterRunUpgrade() throws Exception {
-    //
+  public void testGetDefautSetting() throws Exception {
+    // before upgrade
     List<UserSetting> list = userSettingService.getDefaultDaily(0, 0);
+    assertEquals(0, list.size());
+    // run upgrade
+    runUpgrade();
+    // after upgrade
+    list = userSettingService.getDefaultDaily(0, 0);
     assertEquals(10, list.size());
   }
 
   public void testGetUsersSetting() throws Exception {
+    runUpgrade();
+    //
     userSettingService.save(createUserSetting("root", Arrays.asList("1,2"), Arrays.asList("3,4"), Arrays.asList("5,6")));
     userSettingService.save(createUserSetting("john", Arrays.asList("4,5"), Arrays.asList("2,8"), Arrays.asList("6,7")));
     userSettingService.save(createUserSetting("mary", Arrays.asList("32,5"), Arrays.asList("4,6"), Arrays.asList("1,9")));
@@ -57,6 +74,13 @@ public class UserSettingServiceTest extends BaseCommonsTestCase {
     assertEquals(2, list.size());
   }
 
+  private void runUpgrade() throws Exception {
+    // run upgrade by run daily
+    getService(NotificationService.class).processDigest();
+    //
+    initModifiedDate();
+  }
+  
   private UserSetting createUserSetting(String userId, List<String> instantly, List<String> daily, List<String> weekly) {
     UserSetting model = new UserSetting();
     model.setUserId(userId);
@@ -86,16 +110,47 @@ public class UserSettingServiceTest extends BaseCommonsTestCase {
   private void initModifiedDate() throws Exception {
     OrganizationService organizationService = CommonsUtils.getService(OrganizationService.class);
     ListAccess<User> list = organizationService.getUserHandler().findAllUsers();
-    int offset = 0, size = list.getSize();
     //
-    while (offset < size) {
-      User[] users = list.load(offset, 10);
-      for (int i = 0; i < users.length; i++) {
-        if (users[i] != null && users[i].getUserName() != null) {
-          addLastUpdateTime(users[i].getUserName());
-        }
+    User[] users = list.load(0, list.getSize());
+    for (int i = 0; i < users.length; i++) {
+      if (users[i] != null && users[i].getUserName() != null) {
+        addLastUpdateTime(users[i].getUserName());
       }
-      offset += 10;
     }
+  }
+
+  private void addCreateDateForUser() throws Exception {
+    OrganizationService organizationService = CommonsUtils.getService(OrganizationService.class);
+    ListAccess<User> list = organizationService.getUserHandler().findAllUsers();
+    //
+    User[] users = list.load(0, list.getSize());
+    for (int i = 0; i < users.length; i++) {
+      if (users[i] != null && users[i].getUserName() != null) {
+        users[i].setCreatedDate(Calendar.getInstance().getTime());
+      }
+    }
+  }
+  
+  public void testAddMixingMultiThreads() throws Exception {
+    for (int i = 0; i < 500; i++) {
+      executor.execute(new Runnable() {
+        @Override
+        public void run() {
+          try {
+            OrganizationService organizationService = CommonsUtils.getService(OrganizationService.class);
+            ListAccess<User> list = organizationService.getUserHandler().findAllUsers();
+            //
+            User[] users = list.load(0, list.getSize());
+            for (int i = 0; i < users.length; i++) {
+              userSettingService.addMixin(users[i].getUserName());
+            }
+          } catch (Exception e) {
+            assertFalse(true);
+          }
+        }
+      });
+    }
+    //
+    Thread.sleep(1000);
   }
 }

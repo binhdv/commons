@@ -133,7 +133,7 @@ public class NotificationServiceTest extends BaseCommonsTestCase {
 
     // after sent, the value on on property sendToDaily will auto removed
     notification2 = getNotificationInfoByKeyIdAndParam("TestPlugin", "objectId=idofobject");
-    assertEquals(0, notification2.getSendToDaily().length);
+    assertEquals(1, notification2.getSendToDaily().length);
     
     // Test send to weekly
     configuration.setSendWeekly(true);

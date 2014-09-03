@@ -28,6 +28,7 @@ import javax.jcr.Session;
 import javax.jcr.query.Query;
 import javax.jcr.query.QueryManager;
 
+import org.exoplatform.commons.api.notification.NotificationContext;
 import org.exoplatform.commons.api.notification.model.UserSetting;
 import org.exoplatform.commons.api.notification.service.setting.UserSettingService;
 import org.exoplatform.commons.api.settings.SettingService;
@@ -38,6 +39,7 @@ import org.exoplatform.commons.notification.NotificationConfiguration;
 import org.exoplatform.commons.notification.NotificationUtils;
 import org.exoplatform.commons.notification.impl.AbstractService;
 import org.exoplatform.commons.notification.impl.NotificationSessionManager;
+import org.exoplatform.commons.notification.job.NotificationJob;
 import org.exoplatform.commons.utils.CommonsUtils;
 import org.exoplatform.services.jcr.ext.common.SessionProvider;
 import org.exoplatform.services.jcr.impl.core.query.QueryImpl;
@@ -47,16 +49,14 @@ import org.exoplatform.services.organization.User;
 import org.exoplatform.services.organization.impl.UserImpl;
 
 public class UserSettingServiceImpl extends AbstractService implements UserSettingService {
-  private static final Log        LOG                = ExoLogger.getLogger(UserSettingServiceImpl.class);
+  private static final Log LOG = ExoLogger.getLogger(UserSettingServiceImpl.class);
 
   /** Setting Scope on Common Setting **/
   private static final Scope      NOTIFICATION_SCOPE = Scope.GLOBAL;
   
   private SettingService            settingService;
 
-  private String                    workspace;
-
-  private NotificationConfiguration configuration;
+  private final String                    workspace;
 
   protected static final int MAX_LIMIT = 30;
   
@@ -64,7 +64,6 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   
   public UserSettingServiceImpl(SettingService settingService, NotificationConfiguration configuration) {
     this.settingService = settingService;
-    this.configuration = configuration;
     this.workspace = configuration.getWorkspace();
   }
 
@@ -218,33 +217,45 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
     }
   }
   
-  private StringBuilder buildQuery() {
+  private StringBuilder buildQuery(NotificationContext context) {
     StringBuilder queryBuffer = new StringBuilder();
-    queryBuffer.append(EXO_IS_ACTIVE).append("='true' AND (")
-               .append(EXO_DAILY).append("<>''");
-    if (configuration.isSendWeekly()) {
-      queryBuffer.append(" OR ").append(EXO_WEEKLY).append("<>''");
+    queryBuffer.append(EXO_IS_ACTIVE).append("='true'");
+    Boolean isWeekly = context.value(NotificationJob.JOB_WEEKLY);
+    if (isWeekly) {
+      queryBuffer.append(" AND ").append(EXO_WEEKLY).append("<>''");
+    } else {
+      queryBuffer.append(" AND ").append(EXO_DAILY).append("<>''");
     }
-
-    queryBuffer.append(")");
-
     return queryBuffer;
   }
   
-  private StringBuilder buildQuery(String pluginId) {
-    if (pluginId == null) {
-      return buildQuery();
+  @Override
+  public List<UserSetting> getUserSettingWithDeactivate() {
+    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();;
+    List<UserSetting> models = new ArrayList<UserSetting>();
+    try {
+      Session session = getSession(sProvider, workspace);
+      if(session.getRootNode().hasNode(SETTING_USER_PATH) == false) {
+        return models;
+      }
+      
+      StringBuilder strQuery = new StringBuilder("SELECT * FROM ").append(STG_SCOPE);
+      strQuery.append(" WHERE ").append(EXO_IS_ACTIVE).append("='false'");
+      
+      QueryManager qm = session.getWorkspace().getQueryManager();
+      QueryImpl query = (QueryImpl) qm.createQuery(strQuery.toString(), Query.SQL);
+      
+      NodeIterator iter = query.execute().getNodes();
+      while (iter != null && iter.hasNext()) {
+        Node node = iter.nextNode();
+        models.add(fillModel(node));
+      }
+      
+    } catch (Exception e) {
+      LOG.warn("Can not get the user setting with deactivated");
     }
-    StringBuilder queryBuffer = new StringBuilder();
-    queryBuffer.append(EXO_IS_ACTIVE).append("='true' AND (")
-                //if user wants to receive this kind of notification instantly
-               .append(EXO_INSTANTLY).append("='").append(pluginId).append("'")
-               .append(" OR ").append(EXO_INSTANTLY).append(" LIKE '%,").append(pluginId).append(",%'")
-               .append(" OR ").append(EXO_INSTANTLY).append(" LIKE '%,").append(pluginId).append("'")
-               .append(" OR ").append(EXO_INSTANTLY).append(" LIKE '").append(pluginId).append(",%'")
-               .append(")");
 
-    return queryBuffer;
+    return models;
   }
   
   @Override
@@ -252,7 +263,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
     SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();;
     List<String> userIds = new ArrayList<String>();
     try {
-      NodeIterator iter = getDailyIterator(sProvider, 0, 0, pluginId);
+      NodeIterator iter = getUserSettingByPluginIterator(sProvider, pluginId);
       while (iter != null && iter.hasNext()) {
         Node node = iter.nextNode();
         userIds.add(node.getParent().getName());
@@ -262,6 +273,34 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
     }
 
     return userIds;
+  }
+  
+  /**
+   * Gets the all of the userId who has already plugin setting.
+   * 
+   * @param sProvider
+   * @param pluginId
+   * @return
+   * @throws Exception
+   */
+  private NodeIterator getUserSettingByPluginIterator(SessionProvider sProvider, String pluginId) throws Exception {
+    Session session = getSession(sProvider, workspace);
+    if(session.getRootNode().hasNode(SETTING_USER_PATH) == false) {
+      return null;
+    }
+    
+    StringBuilder strQuery = new StringBuilder("SELECT * FROM ").append(STG_SCOPE);
+    strQuery.append(" WHERE ").append(EXO_IS_ACTIVE).append("='true' AND (")
+    //if user wants to receive this kind of notification instantly
+            .append(EXO_INSTANTLY).append("='").append(pluginId).append("'")
+            .append(" OR ").append(EXO_INSTANTLY).append(" LIKE '%,").append(pluginId).append(",%'")
+            .append(" OR ").append(EXO_INSTANTLY).append(" LIKE '%,").append(pluginId).append("'")
+            .append(" OR ").append(EXO_INSTANTLY).append(" LIKE '").append(pluginId).append(",%'")
+            .append(")");
+    
+    QueryManager qm = session.getWorkspace().getQueryManager();
+    QueryImpl query = (QueryImpl) qm.createQuery(strQuery.toString(), Query.SQL);
+    return query.execute().getNodes();
   }
 
   /**
@@ -273,14 +312,14 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
    * @return
    * @throws Exception
    */
-  private NodeIterator getDailyIterator(SessionProvider sProvider, int offset, int limit, String pluginId) throws Exception {
+  private NodeIterator getDigestIterator(NotificationContext context, SessionProvider sProvider, int offset, int limit) throws Exception {
     Session session = getSession(sProvider, workspace);
     if(session.getRootNode().hasNode(SETTING_USER_PATH) == false) {
       return null;
     }
     
     StringBuilder strQuery = new StringBuilder("SELECT * FROM ").append(STG_SCOPE);
-    strQuery.append(" WHERE ").append(buildQuery(pluginId));
+    strQuery.append(" WHERE ").append(buildQuery(context));
     
     QueryManager qm = session.getWorkspace().getQueryManager();
     QueryImpl query = (QueryImpl) qm.createQuery(strQuery.toString(), Query.SQL);
@@ -292,11 +331,11 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   }
   
   @Override
-  public List<UserSetting> getDaily(int offset, int limit) {
+  public List<UserSetting> getDigestSettingForAllUser(NotificationContext context, int offset, int limit) {
     SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
     List<UserSetting> models = new ArrayList<UserSetting>();
     try {
-      NodeIterator iter = getDailyIterator(sProvider, offset, limit, null);
+      NodeIterator iter = getDigestIterator(context, sProvider, offset, limit);
       while (iter != null && iter.hasNext()) {
         Node node = iter.nextNode();
         models.add(fillModel(node));
@@ -333,22 +372,13 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
    */
   private UserSetting fillModel(Node node) throws Exception {
     UserSetting model = UserSetting.getInstance();
+    model.setUserId(node.getParent().getName());
     model.setDailyProviders(getValues(node, EXO_DAILY));
     model.setWeeklyProviders(getValues(node, EXO_WEEKLY));
-    model.setUserId(node.getParent().getName());
+    model.setInstantlyProviders(getValues(node, EXO_INSTANTLY));
+    model.setActive(node.getProperty(EXO_IS_ACTIVE).getBoolean());
     model.setLastUpdateTime(node.getParent().getProperty(EXO_LAST_MODIFIED_DATE).getDate());
     return model;
-  }
-  
-  @Override
-  public long getNumberOfDaily() {
-    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
-    try {
-      NodeIterator iter = getDailyIterator(sProvider, 0, 0, null);
-      return (iter == null) ? 0l : iter.getSize();
-    } catch (Exception e) {
-      return 0l;
-    }
   }
   
   private NodeIterator getDefaultDailyIterator(SessionProvider sProvider, int offset, int limit) throws Exception {
@@ -367,7 +397,7 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
   }
 
   @Override
-  public List<UserSetting> getDefaultDaily(int offset, int limit) {
+  public List<UserSetting> getDigestDefaultSettingForAllUser(int offset, int limit) {
     SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
     List<UserSetting> users = new ArrayList<UserSetting>();
     try {
@@ -377,9 +407,12 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
         NodeIterator iter = getDefaultDailyIterator(sProvider, offset, limit);
         while (iter.hasNext()) {
           Node node = iter.nextNode();
-          users.add(UserSetting.getInstance()
-                    .setUserId(node.getName())
-                    .setLastUpdateTime(node.getProperty(EXO_LAST_MODIFIED_DATE).getDate()));
+          //make sure that have the mixin-type defaultSetting and don't have child node for notification setting
+          if (!node.getNodes().hasNext()) {
+            users.add(UserSetting.getInstance()
+                      .setUserId(node.getName())
+                      .setLastUpdateTime(node.getProperty(EXO_LAST_MODIFIED_DATE).getDate()));
+          }
         }
       }
     } catch (Exception e) {
@@ -388,20 +421,5 @@ public class UserSettingServiceImpl extends AbstractService implements UserSetti
 
     return users;
   }
-
-  @Override
-  public long getNumberOfDefaultDaily() {
-    SessionProvider sProvider = NotificationSessionManager.getOrCreateSessionProvider();
-    try {
-      Session session = getSession(sProvider, workspace);
-      if (session.getRootNode().hasNode(SETTING_USER_PATH)) {
-        NodeIterator iter = getDefaultDailyIterator(sProvider, 0, 0);
-        return iter.getSize();
-      }
-    } catch (Exception e) {
-      LOG.error("Failed to get default daily users have notification messages", e);
-    }
-    return 0;
-  }
-
+ 
 }

@@ -17,7 +17,6 @@
 package org.exoplatform.commons.notification.impl.service.storage;
 
 import java.util.ArrayList;
-import java.util.Calendar;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
@@ -26,6 +25,7 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReentrantLock;
 
+import javax.jcr.Item;
 import javax.jcr.Node;
 import javax.jcr.NodeIterator;
 import javax.jcr.Session;
@@ -50,19 +50,18 @@ import org.exoplatform.services.log.Log;
 public class NotificationDataStorageImpl extends AbstractService implements NotificationDataStorage {
   private static final Log         LOG              = ExoLogger.getLogger(NotificationDataStorageImpl.class);
 
-  public static final String       REMOVE_ALL       = "removeAll";
+  private static final String       REMOVE_ALL       = "removeAll";
+  
+  private static final String       REMOVE_DAILY     = "removeDaily";
 
   private String                    workspace;
 
-  private NotificationConfiguration configuration    = null;
-  
   private final ReentrantLock lock = new ReentrantLock();
 
   private Map<String, Set<String>>  removeByCallBack = new ConcurrentHashMap<String, Set<String>>();
 
   public NotificationDataStorageImpl(NotificationConfiguration configuration) {
     this.workspace = configuration.getWorkspace();
-    this.configuration = configuration;
   }
 
   @Override
@@ -108,7 +107,7 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
       boolean isDaily = context.value(NotificationJob.JOB_DAILY);
       if (isDaily) {
         for (String pluginId : setting.getDailyProviders()) {
-          putMap(notificationData, NotificationKey.key(pluginId), getDailyNotifs(sProvider, pluginId, setting.getUserId()));
+          putMap(notificationData, NotificationKey.key(pluginId), getDailyNotifs(sProvider, context, pluginId, setting.getUserId()));
         }
       }
     } catch (Exception e) {
@@ -136,12 +135,14 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
   }
 
   private List<NotificationInfo> getDailyNotifs(SessionProvider sProvider,
-                                                              String pluginId,
-                                                              String userId) throws Exception {
+                                                NotificationContext context,
+                                                String pluginId,
+                                                String userId) throws Exception {
+    
     List<NotificationInfo> messages = new ArrayList<NotificationInfo>();
-    Node messageHomeNode = getOrCreateMessageParent(sProvider, workspace, pluginId).getParent();
-    NodeIterator iter = getDailyNodes(messageHomeNode, userId);
-    Session session = messageHomeNode.getSession();
+    Node plugInDayNode = getParentNodeByDate(sProvider, workspace, context, pluginId);
+    NodeIterator iter = getDailyNodes(plugInDayNode, userId);
+    Session session = plugInDayNode.getSession();
     while (iter.hasNext()) {
       Node node = iter.nextNode();
       NotificationInfo model = fillModel(node);
@@ -151,9 +152,29 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
     return messages;
   }
 
+  /**
+   * Makes the node path for MessageHome node '/eXoNotification/messageHome/<pluginId>/<DAY_OF_MONTH>/'
+   * 
+   * @param sProvider
+   * @param workspace
+   * @param context keeping the day if in the daily job context
+   * @param pluginId
+   * @return
+   * @throws Exception
+   */
+  private Node getParentNodeByDate(SessionProvider sProvider,
+                                 String workspace,
+                                 NotificationContext context,
+                                 String pluginId) throws Exception {
+    
+    Node providerNode = getMessageNodeByPluginId(sProvider, workspace, pluginId);
+    String dayName = context.value(NotificationJob.DAY_OF_JOB);
+    return getOrCreateMessageNode(providerNode, DAY + dayName);
+  }
+
   private List<NotificationInfo> getWeeklyNotifs(SessionProvider sProvider,
-                                                               String pluginId,
-                                                               String userId) throws Exception {
+                                                 String pluginId,
+                                                 String userId) throws Exception {
     List<NotificationInfo> messages = new ArrayList<NotificationInfo>();
     Node messageHomeNode = getMessageNodeByPluginId(sProvider, workspace, pluginId);
     NodeIterator iter = getWeeklyNodes(messageHomeNode, userId);
@@ -175,7 +196,6 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
     StringBuilder strQuery = new StringBuilder("SELECT * FROM ").append(NTF_MESSAGE).append(" WHERE ");
     strQuery.append(" jcr:path LIKE '").append(messageHomeNode.getPath()).append("/%'");
     strQuery.append(" AND (").append(NTF_SEND_TO_WEEKLY).append("='").append(userId).append("'");
-    
     strQuery.append(" OR ").append(NTF_SEND_TO_WEEKLY).append("='").append(NotificationInfo.FOR_ALL_USER)
             .append("') AND ").append(NTF_FROM).append("<>'").append(userId).append("'");
     strQuery.append(" order by ").append(NTF_ORDER).append(ASCENDING).append(", exo:dateCreated").append(DESCENDING);
@@ -191,7 +211,7 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
     return it;
   }
   
-  private NodeIterator getDailyNodes(Node messageHomeNode, String userId) throws Exception {
+  private NodeIterator getDailyNodes(Node pluginDayNode, String userId) throws Exception {
     final boolean stats = NotificationContextFactory.getInstance().getStatistics().isStatisticsEnabled();
     long startTime = 0;
     if ( stats ) startTime = System.currentTimeMillis();
@@ -199,15 +219,14 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
     userId = userId.replace("'", "''");
     
     StringBuilder strQuery = new StringBuilder("SELECT * FROM ").append(NTF_MESSAGE).append(" WHERE ");
-    String dayName = String.valueOf(Calendar.getInstance().get(Calendar.DAY_OF_MONTH));
-    strQuery.append(" (jcr:path LIKE '").append(messageHomeNode.getPath()).append("/").append(DAY).append(dayName).append("/%'")
-              .append(" AND NOT jcr:path LIKE '").append(messageHomeNode.getPath()).append("/").append(DAY).append(dayName).append("/%/%')");
+    strQuery.append(" (jcr:path LIKE '").append(pluginDayNode.getPath()).append("/%'")
+              .append(" AND NOT jcr:path LIKE '").append(pluginDayNode.getPath()).append("/%/%')");
     strQuery.append(" AND (").append(NTF_SEND_TO_DAILY).append("='").append(userId).append("'");
     strQuery.append(" OR ").append(NTF_SEND_TO_DAILY).append("='").append(NotificationInfo.FOR_ALL_USER)
               .append("') AND ").append(NTF_FROM).append("<>'").append(userId).append("'");
     strQuery.append(" order by ").append(NTF_ORDER).append(ASCENDING).append(", exo:dateCreated").append(DESCENDING);
 
-    QueryManager qm = messageHomeNode.getSession().getWorkspace().getQueryManager();
+    QueryManager qm = pluginDayNode.getSession().getWorkspace().getQueryManager();
     Query query = qm.createQuery(strQuery.toString(), Query.SQL);
     NodeIterator it = query.execute().getNodes();
     
@@ -252,6 +271,8 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
   private void removeDaily(Session session, NotificationInfo message, String path) throws Exception {
     if (message.getSendToDaily().length == 1 && message.getSendToWeekly().length == 0) {
       putRemoveMap(REMOVE_ALL, path);
+    } if (message.getSendToDaily().length > 0 &&  NotificationInfo.FOR_ALL_USER.equals(message.getSendToDaily()[0])) {
+      putRemoveMap(REMOVE_DAILY, path);
     } else {
       removeProperty(session, path, NTF_SEND_TO_DAILY, message.getTo());
     }
@@ -308,6 +329,25 @@ public class NotificationDataStorageImpl extends AbstractService implements Noti
             LOG.debug("Remove NotificationMessage " + nodePath);
           } catch (Exception e) {
             LOG.warn("Failed to remove node of NotificationMessage " + nodePath + "\n" + e.getMessage());
+            LOG.debug("Remove NotificationMessage " + nodePath, e);
+          }
+        }
+        session.save();
+      }
+      
+      listPaths = removeByCallBack.get(REMOVE_DAILY);
+      if (listPaths != null && listPaths.size() > 0) {
+        for (String nodePath : listPaths) {
+          try {
+            Item item = session.getItem(nodePath);
+            if (item.isNode()) {
+              Node node = (Node) item;
+              node.setProperty(NTF_SEND_TO_DAILY, new String[] { "" });
+            }
+            LOG.debug("Remove SendToDaily property " + nodePath);
+          } catch (Exception e) {
+            LOG.warn("Failed to remove SendToDaily property of " + nodePath + "\n" + e.getMessage());
+            LOG.debug("Remove SendToDaily property " + nodePath, e);
           }
         }
         session.save();

@@ -56,4 +56,10 @@ public class DigestWeeklyPlugin extends AbstractNotificationPlugin {
     return true;
   }
 
+  @Override
+  protected String makeWebNotif(NotificationContext ctx) {
+    // TODO Auto-generated method stub
+    return null;
+  }
+
 }

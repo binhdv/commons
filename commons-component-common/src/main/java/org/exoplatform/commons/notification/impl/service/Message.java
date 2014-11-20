@@ -40,6 +40,8 @@ import javax.websocket.EndpointConfig;
  */
 public class Message {
   
+  private String              notifId;
+  
   private String              from;
 
   private String              to;
@@ -56,6 +58,14 @@ public class Message {
   }
 
   public Message() {
+  }
+
+  public String getNotifId() {
+    return notifId;
+  }
+
+  public void setNotifId(String notifId) {
+    this.notifId = notifId;
   }
 
   public String getFrom() {
@@ -132,6 +142,7 @@ public class Message {
     @Override
     public String encode(final Message message) throws EncodeException {
         return Json.createObjectBuilder()
+            .add("notifId", message.getNotifId())
             .add("to", message.getTo())
             .add("pluginId", message.getPluginId())
             .add("ownerParameter", message.buildStringFromMap(message.getOwnerParameter()))
@@ -158,6 +169,7 @@ public class Message {
 
         try(final JsonReader reader = factory.createReader(new StringReader(str))) {
             final JsonObject json = reader.readObject();
+            message.setNotifId(json.getString("notifId"));
             message.setTo(json.getString("to"));
             message.setPluginId(json.getString("pluginId"));
             message.setOwnerParameter(message.buildMapFromString(json.getString("ownerParameter")));

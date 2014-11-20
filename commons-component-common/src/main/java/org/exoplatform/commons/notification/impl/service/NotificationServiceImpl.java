@@ -124,7 +124,8 @@ public class NotificationServiceImpl extends AbstractService implements Notifica
     if (plugin != null) {
       nCtx.setNotificationInfo(notification);
       MessageInfo info = plugin.buildMessage(nCtx);
-      sendNotif(notification, info.getBody());
+      String message = plugin.buildWebNotif(nCtx);
+      sendNotif(notification, message);
       
       if (info != null) {
         if (NotificationUtils.isValidEmailAddresses(info.getTo()) == true) {
@@ -153,6 +154,7 @@ public class NotificationServiceImpl extends AbstractService implements Notifica
   
   private Message buildMessage(NotificationInfo notification, String text) {
     Message message = new Message();
+    message.setNotifId(notification.getId());
     message.setTo(notification.getTo());
     message.setPluginId(notification.getKey().getId());
     message.setOwnerParameter(notification.getOwnerParameter());

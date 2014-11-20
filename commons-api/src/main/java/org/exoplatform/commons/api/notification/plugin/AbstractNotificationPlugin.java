@@ -88,6 +88,8 @@ public abstract class AbstractNotificationPlugin extends BaseComponentPlugin {
    */
   protected abstract MessageInfo makeMessage(NotificationContext ctx);
   
+  protected abstract String makeWebNotif(NotificationContext ctx);
+  
   /**
    * Makes the Digest message from given NotificationMessage what keep inside NotificationContext
    * @param ctx
@@ -117,6 +119,9 @@ public abstract class AbstractNotificationPlugin extends BaseComponentPlugin {
                .to(NotificationPluginUtils.getTo(message.getTo())).end();
   }
 
+  public String buildWebNotif(NotificationContext ctx) {
+    return makeWebNotif(ctx);
+  }
   /**
    * Makes digest message
    * @param ctx

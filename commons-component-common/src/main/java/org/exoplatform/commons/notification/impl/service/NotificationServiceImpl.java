@@ -16,17 +16,11 @@
  */
 package org.exoplatform.commons.notification.impl.service;
 
-import java.net.URI;
 import java.util.ArrayList;
 import java.util.Calendar;
 import java.util.Collection;
 import java.util.List;
 import java.util.Map;
-
-import javax.websocket.ContainerProvider;
-import javax.websocket.RemoteEndpoint;
-import javax.websocket.Session;
-import javax.websocket.WebSocketContainer;
 
 import org.exoplatform.commons.api.notification.NotificationContext;
 import org.exoplatform.commons.api.notification.model.MessageInfo;
@@ -141,25 +135,8 @@ public class NotificationServiceImpl extends AbstractService implements Notifica
   }
 
   private void sendNotif(NotificationInfo notification, String message) {
-    try {
-      URI uri = URI.create("ws://localhost:8080/social-portlet/notify/" + notification.getTo());
-      WebSocketContainer wsContainer = ContainerProvider.getWebSocketContainer();
-      Session session = wsContainer.connectToServer(NotificationClientEndPoint.class, uri);
-      RemoteEndpoint.Basic basicRemote = session.getBasicRemote();
-      basicRemote.sendObject(buildMessage(notification, message));
-    } catch (Exception e) {
-      LOG.error("Failed to connect with server : " + e, e.getMessage());
-    }
-  }
-  
-  private Message buildMessage(NotificationInfo notification, String text) {
-    Message message = new Message();
-    message.setNotifId(notification.getId());
-    message.setTo(notification.getTo());
-    message.setPluginId(notification.getKey().getId());
-    message.setOwnerParameter(notification.getOwnerParameter());
-    message.setMessage(text);
-    return message;
+    VertXServerEndpoint serverEndpoint = new VertXServerEndpoint();
+    serverEndpoint.sendMessageForRandomIdentifier(message, notification.getTo());
   }
   
   @Override
